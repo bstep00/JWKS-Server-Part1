@@ -1,4 +1,3 @@
-// Package main is a basic JWKS server that can issue JWTs 
 package main
 
 import (
@@ -14,12 +13,13 @@ import (
 	"github.com/golang-jwt/jwt"
 )
 
-// Key holds an RSA key pair
+// Key holds an RSA key pair and its metadata
 type Key struct {
 	ID         string
 	PrivateKey *rsa.PrivateKey
 	Expiry     time.Time
 }
+
 // keys stores all the RSA keys
 var keys []Key
 
@@ -56,7 +56,8 @@ func jwksHandler(w http.ResponseWriter, r *http.Request) {
 	var jwks struct {
 		Keys []jwk `json:"keys"`
 	}
-// Add non-expired keys to the JWKS
+
+	// Add non-expired keys to the JWKS
 	for _, key := range keys {
 		if key.Expiry.After(time.Now()) {
 			jwks.Keys = append(jwks.Keys, jwk{
@@ -83,24 +84,32 @@ func authHandler(w http.ResponseWriter, r *http.Request) {
 
 	wantExpired := r.URL.Query().Get("expired") == "true"
 	var key Key
+	keyFound := false
 	for i := len(keys) - 1; i >= 0; i-- {
 		if (wantExpired && keys[i].Expiry.Before(time.Now())) || (!wantExpired && keys[i].Expiry.After(time.Now())) {
 			key = keys[i]
+			keyFound = true
 			break
 		}
 	}
 
-	if key.PrivateKey == nil {
+	if !keyFound {
 		http.Error(w, "No suitable key found", http.StatusNotFound)
 		return
 	}
+
 	// Create and sign the JWT
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"exp": key.Expiry.Unix(),
 	})
 	token.Header["kid"] = key.ID
 
-	tokenString, _ := token.SignedString(key.PrivateKey)
+	tokenString, err := token.SignedString(key.PrivateKey)
+	if err != nil {
+		http.Error(w, "Error signing token", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/jwt")
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte(tokenString))
