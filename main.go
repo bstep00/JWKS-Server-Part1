@@ -1,4 +1,4 @@
-// Package main implements a basic JWKS server with JWT issuance capabilities.
+// Package main is a basic JWKS server that can issue JWTs 
 package main
 
 import (
@@ -6,25 +6,24 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
-	"log"
+	"fmt"
 	"math/big"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/golang-jwt/jwt"
 )
 
-// Key represents a RSA key pair with metadata
+// Key holds an RSA key pair
 type Key struct {
 	ID         string
 	PrivateKey *rsa.PrivateKey
 	Expiry     time.Time
 }
-
+// keys stores all the RSA keys
 var keys []Key
 
-// generateKey creates a new RSA key pair and adds it to the keys slice
+// generateKey creates a new RSA key pair and adds it to keys
 func generateKey(expired bool) {
 	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 	expiry := time.Now().Add(24 * time.Hour)
@@ -32,13 +31,13 @@ func generateKey(expired bool) {
 		expiry = time.Now().Add(-1 * time.Hour)
 	}
 	keys = append(keys, Key{
-		ID:         strconv.Itoa(len(keys) + 1),
+		ID:         fmt.Sprintf("key%d", len(keys)+1),
 		PrivateKey: privateKey,
 		Expiry:     expiry,
 	})
 }
 
-// jwksHandler serves the JWKS (JSON Web Key Set) containing public keys
+// jwksHandler sends the public keys as a JWKS
 func jwksHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -57,8 +56,7 @@ func jwksHandler(w http.ResponseWriter, r *http.Request) {
 	var jwks struct {
 		Keys []jwk `json:"keys"`
 	}
-
-	// Add non-expired keys to the JWKS
+// Add non-expired keys to the JWKS
 	for _, key := range keys {
 		if key.Expiry.After(time.Now()) {
 			jwks.Keys = append(jwks.Keys, jwk{
@@ -73,14 +71,10 @@ func jwksHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(jwks); err != nil {
-		log.Printf("Error encoding JWKS: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+	json.NewEncoder(w).Encode(jwks)
 }
 
-// authHandler issues JWTs based on the request parameters
+// authHandler creates and sends a JWT
 func authHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -100,37 +94,25 @@ func authHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No suitable key found", http.StatusNotFound)
 		return
 	}
-
 	// Create and sign the JWT
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"exp": key.Expiry.Unix(),
 	})
 	token.Header["kid"] = key.ID
 
-	tokenString, err := token.SignedString(key.PrivateKey)
-	if err != nil {
-		log.Printf("Error signing token: %v", err)
-		http.Error(w, "Error creating token", http.StatusInternalServerError)
-		return
-	}
-
+	tokenString, _ := token.SignedString(key.PrivateKey)
 	w.Header().Set("Content-Type", "application/jwt")
 	w.WriteHeader(http.StatusCreated)
-	if _, err := w.Write([]byte(tokenString)); err != nil {
-		log.Printf("Error writing response: %v", err)
-	}
+	w.Write([]byte(tokenString))
 }
 
 func main() {
-	// Generate initial keys (one valid, one expired)
 	generateKey(false) // Valid key
 	generateKey(true)  // Expired key
 
-	// Set up HTTP handlers
 	http.HandleFunc("/.well-known/jwks.json", jwksHandler)
 	http.HandleFunc("/auth", authHandler)
 
-	// Start the server
-	log.Println("Starting server on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	fmt.Println("Starting server...")
+	http.ListenAndServe(":8080", nil)
 }
