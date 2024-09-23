@@ -13,7 +13,7 @@ import (
 	"github.com/golang-jwt/jwt"
 )
 
-// Key holds an RSA key pair and its metadata
+// Key holds an RSA key pair
 type Key struct {
 	ID         string
 	PrivateKey *rsa.PrivateKey
@@ -44,34 +44,24 @@ func jwksHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type jwk struct {
-		Kid string `json:"kid"`
-		Kty string `json:"kty"`
-		Alg string `json:"alg"`
-		Use string `json:"use"`
-		N   string `json:"n"`
-		E   string `json:"e"`
-	}
-
 	var jwks struct {
-		Keys []jwk `json:"keys"`
+		Keys []map[string]string `json:"keys"`
 	}
 
 	// Add non-expired keys to the JWKS
 	for _, key := range keys {
 		if key.Expiry.After(time.Now()) {
-			jwks.Keys = append(jwks.Keys, jwk{
-				Kid: key.ID,
-				Kty: "RSA",
-				Alg: "RS256",
-				Use: "sig",
-				N:   base64.RawURLEncoding.EncodeToString(key.PrivateKey.N.Bytes()),
-				E:   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.PrivateKey.E)).Bytes()),
+			jwks.Keys = append(jwks.Keys, map[string]string{
+				"kid": key.ID,
+				"kty": "RSA",
+				"alg": "RS256",
+				"use": "sig",
+				"n":   base64.RawURLEncoding.EncodeToString(key.PrivateKey.N.Bytes()),
+				"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.PrivateKey.E)).Bytes()),
 			})
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(jwks)
 }
 
@@ -84,16 +74,14 @@ func authHandler(w http.ResponseWriter, r *http.Request) {
 
 	wantExpired := r.URL.Query().Get("expired") == "true"
 	var key Key
-	keyFound := false
-	for i := len(keys) - 1; i >= 0; i-- {
-		if (wantExpired && keys[i].Expiry.Before(time.Now())) || (!wantExpired && keys[i].Expiry.After(time.Now())) {
-			key = keys[i]
-			keyFound = true
+	for _, k := range keys {
+		if (wantExpired && k.Expiry.Before(time.Now())) || (!wantExpired && k.Expiry.After(time.Now())) {
+			key = k
 			break
 		}
 	}
 
-	if !keyFound {
+	if key.PrivateKey == nil {
 		http.Error(w, "No suitable key found", http.StatusNotFound)
 		return
 	}
@@ -104,14 +92,7 @@ func authHandler(w http.ResponseWriter, r *http.Request) {
 	})
 	token.Header["kid"] = key.ID
 
-	tokenString, err := token.SignedString(key.PrivateKey)
-	if err != nil {
-		http.Error(w, "Error signing token", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/jwt")
-	w.WriteHeader(http.StatusCreated)
+	tokenString, _ := token.SignedString(key.PrivateKey)
 	w.Write([]byte(tokenString))
 }
 
@@ -122,6 +103,6 @@ func main() {
 	http.HandleFunc("/.well-known/jwks.json", jwksHandler)
 	http.HandleFunc("/auth", authHandler)
 
-	fmt.Println("Starting server...")
+	fmt.Println("Server starting...")
 	http.ListenAndServe(":8080", nil)
 }
